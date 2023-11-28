@@ -1377,6 +1377,7 @@ version = "0.1.0"
 dependencies = [
  "bindgen",
  "eframe",
+ "pkg-config",
 ]
 
 [[package]]

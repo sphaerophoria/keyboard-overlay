@@ -10,8 +10,10 @@ use std::{
 
 use eframe::egui;
 use egui::{FontFamily, RichText};
+use xkbcommon::Xkb;
 
 mod input_bindings;
+mod xkbcommon;
 
 // https://docs.kernel.org/input/input.html
 // value is the value the event carries. Either a relative change for EV_REL, absolute
@@ -33,26 +35,15 @@ pub enum KeyPress {
     Other(String),
 }
 
-impl KeyPress {
-    fn from_code(code: u16) -> KeyPress {
-        use input_bindings::*;
-        match code as u32 {
-            KEY_LEFTCTRL | KEY_RIGHTCTRL => KeyPress::Ctrl,
-            KEY_LEFTSHIFT | KEY_RIGHTSHIFT => KeyPress::Shift,
-            KEY_LEFTALT | KEY_RIGHTALT => KeyPress::Alt,
-            KEY_LEFTMETA | KEY_RIGHTMETA => KeyPress::Super,
-            _ => KeyPress::Other(code_to_str(code).to_string()),
-        }
-    }
-}
-
 #[derive(Debug)]
 enum ArgParseError {
     EventInputMissing,
+    XkbInputMissing,
 }
 
 struct Args {
     event_input_path: PathBuf,
+    xkb_mapping: PathBuf,
 }
 
 impl Args {
@@ -61,9 +52,13 @@ impl Args {
         let _ = arg_it.next();
 
         let mut event_input_path = None;
+        let mut xkb_mapping = None;
 
         while let Some(arg) = arg_it.next() {
             match arg.as_str() {
+                "--xkb-mapping" => {
+                    xkb_mapping = arg_it.next().map(Into::into);
+                }
                 "--event-input-path" => {
                     event_input_path = arg_it.next().map(Into::into);
                 }
@@ -80,8 +75,12 @@ impl Args {
         }
 
         let event_input_path = event_input_path.ok_or(ArgParseError::EventInputMissing)?;
+        let xkb_mapping = xkb_mapping.ok_or(ArgParseError::XkbInputMissing)?;
 
-        Ok(Args { event_input_path })
+        Ok(Args {
+            event_input_path,
+            xkb_mapping,
+        })
     }
 
     fn parse<It: Iterator<Item = String>>(arg_it: It) -> Args {
@@ -101,6 +100,7 @@ impl Args {
 \n\
             Args:\n\
             --event-input-path [path]: Path to read keyboard events from\n\
+            --xkb-mapping [path]: Path to read xkb mapping from\n\
             --help: Show this help and exit\n\
         "
         .to_string()
@@ -148,6 +148,8 @@ fn reader_thread(tx: Sender<InputEvent>, rx: Receiver<egui::Context>, event_inpu
 fn main() {
     let args = Args::parse(std::env::args());
 
+    let xkb = Xkb::new(&args.xkb_mapping).expect("Failed to create xkb");
+
     let (keycode_tx, keycode_rx) = mpsc::channel();
     let (context_tx, context_rx) = mpsc::channel();
     let _t = thread::spawn(move || reader_thread(keycode_tx, context_rx, args.event_input_path));
@@ -163,7 +165,7 @@ fn main() {
     eframe::run_native(
         "My egui App",
         native_options,
-        Box::new(move |cc| Box::new(App::new(cc, keycode_rx, context_tx))),
+        Box::new(move |cc| Box::new(App::new(cc, keycode_rx, context_tx, xkb))),
     )
     .expect("Failed to run gui");
 }
@@ -207,6 +209,7 @@ struct KeyHistoryItem {
 
 struct App {
     rx: Receiver<InputEvent>,
+    xkb: Xkb,
     pressed_keycodes: VecDeque<KeyHistoryItem>,
     rendered_keycodes: Vec<String>,
     current_modifier_state: Modifiers,
@@ -217,6 +220,7 @@ impl App {
         cc: &eframe::CreationContext<'_>,
         rx: Receiver<InputEvent>,
         tx: Sender<egui::Context>,
+        xkb: Xkb,
     ) -> Self {
         tx.send(cc.egui_ctx.clone()).unwrap();
         cc.egui_ctx
@@ -235,6 +239,7 @@ impl App {
                 alt: false,
                 sup: false,
             },
+            xkb,
         }
     }
 
@@ -244,7 +249,10 @@ impl App {
             None => return,
         };
 
-        let keypress = KeyPress::from_code(event.event.code);
+        let keypress = match self.xkb.push_keycode(event.event.code, &press_state) {
+            Some(v) => v,
+            None => return,
+        };
 
         self.current_modifier_state.update(&keypress, &press_state);
 
@@ -378,104 +386,4 @@ fn render_keycodes<'a, It: Iterator<Item = &'a KeyHistoryItem>>(
     ret.push(render_item(last_item, &last_item_count));
 
     (ret, last_elem_idx)
-}
-
-fn code_to_str(code: u16) -> &'static str {
-    match code {
-        1 => "ESC",
-        2 => "1",
-        3 => "2",
-        4 => "3",
-        5 => "4",
-        6 => "5",
-        7 => "6",
-        8 => "7",
-        9 => "8",
-        10 => "9",
-        11 => "0",
-        12 => "-",
-        13 => "=",
-        14 => "BACKSPACE",
-        15 => "TAB",
-        16 => "Q",
-        17 => "W",
-        18 => "E",
-        19 => "R",
-        20 => "T",
-        21 => "Y",
-        22 => "U",
-        23 => "I",
-        24 => "O",
-        25 => "P",
-        26 => "LEFTBRACE",
-        27 => "RIGHTBRACE",
-        28 => "ENTER",
-        29 => "LEFTCTRL",
-        30 => "A",
-        31 => "S",
-        32 => "D",
-        33 => "F",
-        34 => "G",
-        35 => "H",
-        36 => "J",
-        37 => "K",
-        38 => "L",
-        39 => "SEMICOLON",
-        40 => "APOSTROPHE",
-        41 => "GRAVE",
-        42 => "LEFTSHIFT",
-        43 => "BACKSLASH",
-        44 => "Z",
-        45 => "X",
-        46 => "C",
-        47 => "V",
-        48 => "B",
-        49 => "N",
-        50 => "M",
-        51 => "COMMA",
-        52 => "DOT",
-        53 => "SLASH",
-        54 => "RIGHTSHIFT",
-        55 => "KPASTERISK",
-        56 => "LEFTALT",
-        57 => "SPACE",
-        58 => "CAPSLOCK",
-        59 => "F1",
-        60 => "F2",
-        61 => "F3",
-        62 => "F4",
-        63 => "F5",
-        64 => "F6",
-        65 => "F7",
-        66 => "F8",
-        67 => "F9",
-        68 => "F10",
-        69 => "NUMLOCK",
-        70 => "SCROLLLOCK",
-        71 => "KP7",
-        72 => "KP8",
-        73 => "KP9",
-        74 => "KPMINUS",
-        75 => "KP4",
-        76 => "KP5",
-        77 => "KP6",
-        78 => "KPPLUS",
-        79 => "KP1",
-        80 => "KP2",
-        81 => "KP3",
-        82 => "KP0",
-        83 => "KPDOT",
-        87 => "F11",
-        88 => "F12",
-        89 => "RO",
-        96 => "KPENTER",
-        97 => "RIGHTCTRL",
-        98 => "KPSLASH",
-        99 => "SYSRQ",
-        100 => "RIGHTALT",
-        101 => "LINEFEED",
-        102 => "HOME",
-        103 => "UP",
-        _ => "UNKNOWN",
-    }
 }

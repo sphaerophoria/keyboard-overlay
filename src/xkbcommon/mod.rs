@@ -1,7 +1,8 @@
 use std::{
+    env,
     fs::File,
     io::{BufReader, Error as IoError, Read},
-    path::Path,
+    process::{Command, Stdio},
 };
 
 use super::{KeyPress, KeyPressState};
@@ -15,6 +16,10 @@ pub enum XkbCreationError {
     ReadMappings(IoError),
     KeymapCreationFailed,
     StateCreationFailed,
+    TmpDir(IoError),
+    NoDisplay,
+    RunXkbComp(IoError),
+    XkbCompFail,
 }
 
 macro_rules! xkb_ptr_wrapper {
@@ -55,10 +60,10 @@ pub struct Xkb {
 }
 
 impl Xkb {
-    pub fn new(xkb_mapping_path: &Path) -> Result<Xkb, XkbCreationError> {
+    pub fn new() -> Result<Xkb, XkbCreationError> {
         unsafe {
             let mut context = create_context()?;
-            let mut keymap = create_keymap(&mut context, xkb_mapping_path)?;
+            let mut keymap = create_keymap(&mut context)?;
 
             // NOTE: state will hold a reference to a keymap, which wil hold a reference to the
             // context, so we do not need to explicitly hold a reference to the context/keymaps
@@ -88,16 +93,8 @@ unsafe fn create_context() -> Result<Context, XkbCreationError> {
     .ok_or(XkbCreationError::ContextCreationFailed)
 }
 
-unsafe fn create_keymap(
-    context: &mut Context,
-    xkb_mapping_path: &Path,
-) -> Result<KeyMap, XkbCreationError> {
-    let mut f =
-        BufReader::new(File::open(xkb_mapping_path).map_err(XkbCreationError::OpenMappings)?);
-
-    let mut mapping_str = Vec::new();
-    f.read_to_end(&mut mapping_str)
-        .map_err(XkbCreationError::ReadMappings)?;
+unsafe fn create_keymap(context: &mut Context) -> Result<KeyMap, XkbCreationError> {
+    let mapping_str = get_mappings_from_environment()?;
 
     KeyMap::new(bindings::xkb_keymap_new_from_buffer(
         context.as_ptr(),
@@ -187,4 +184,34 @@ unsafe fn keysym_to_keypress(sym: bindings::xkb_keysym_t) -> Option<KeyPress> {
     };
 
     Some(ret)
+}
+
+fn get_mappings_from_environment() -> Result<Vec<u8>, XkbCreationError> {
+    // libxkbcomp is integrated into winit/wayland-client which is pretty far down the stack. We
+    // don't have access to the real mappings, and we need them to apply user mappings to the evdev
+    // codes pulled in from the kernel. Use xkbcomp to export the mappings through the X/XWayland
+    // and re-load them manually here
+    let mapping_dir = tempfile::tempdir().map_err(XkbCreationError::TmpDir)?;
+    let xkb_mapping_path = mapping_dir.path().join("mappings.xkb");
+
+    let status = Command::new("xkbcomp")
+        .arg(env::var("DISPLAY").map_err(|_| XkbCreationError::NoDisplay)?)
+        .arg(&xkb_mapping_path)
+        .stderr(Stdio::null())
+        .stdout(Stdio::null())
+        .status()
+        .map_err(XkbCreationError::RunXkbComp)?;
+
+    if !status.success() {
+        return Err(XkbCreationError::XkbCompFail);
+    }
+
+    let mut f =
+        BufReader::new(File::open(xkb_mapping_path).map_err(XkbCreationError::OpenMappings)?);
+
+    let mut mapping_str = Vec::new();
+    f.read_to_end(&mut mapping_str)
+        .map_err(XkbCreationError::ReadMappings)?;
+
+    Ok(mapping_str)
 }

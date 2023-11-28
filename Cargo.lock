@@ -1378,6 +1378,7 @@ dependencies = [
  "bindgen",
  "eframe",
  "pkg-config",
+ "tempfile",
 ]
 
 [[package]]

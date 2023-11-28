@@ -38,12 +38,10 @@ pub enum KeyPress {
 #[derive(Debug)]
 enum ArgParseError {
     EventInputMissing,
-    XkbInputMissing,
 }
 
 struct Args {
     event_input_path: PathBuf,
-    xkb_mapping: PathBuf,
 }
 
 impl Args {
@@ -52,13 +50,9 @@ impl Args {
         let _ = arg_it.next();
 
         let mut event_input_path = None;
-        let mut xkb_mapping = None;
 
         while let Some(arg) = arg_it.next() {
             match arg.as_str() {
-                "--xkb-mapping" => {
-                    xkb_mapping = arg_it.next().map(Into::into);
-                }
                 "--event-input-path" => {
                     event_input_path = arg_it.next().map(Into::into);
                 }
@@ -75,12 +69,8 @@ impl Args {
         }
 
         let event_input_path = event_input_path.ok_or(ArgParseError::EventInputMissing)?;
-        let xkb_mapping = xkb_mapping.ok_or(ArgParseError::XkbInputMissing)?;
 
-        Ok(Args {
-            event_input_path,
-            xkb_mapping,
-        })
+        Ok(Args { event_input_path })
     }
 
     fn parse<It: Iterator<Item = String>>(arg_it: It) -> Args {
@@ -100,7 +90,6 @@ impl Args {
 \n\
             Args:\n\
             --event-input-path [path]: Path to read keyboard events from\n\
-            --xkb-mapping [path]: Path to read xkb mapping from\n\
             --help: Show this help and exit\n\
         "
         .to_string()
@@ -148,7 +137,7 @@ fn reader_thread(tx: Sender<InputEvent>, rx: Receiver<egui::Context>, event_inpu
 fn main() {
     let args = Args::parse(std::env::args());
 
-    let xkb = Xkb::new(&args.xkb_mapping).expect("Failed to create xkb");
+    let xkb = Xkb::new().expect("Failed to create xkb");
 
     let (keycode_tx, keycode_rx) = mpsc::channel();
     let (context_tx, context_rx) = mpsc::channel();

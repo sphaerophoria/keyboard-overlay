@@ -152,7 +152,7 @@ fn main() {
         .with_mouse_passthrough(true);
 
     eframe::run_native(
-        "My egui App",
+        "keyboard overlay",
         native_options,
         Box::new(move |cc| Box::new(App::new(cc, keycode_rx, context_tx, xkb))),
     )
